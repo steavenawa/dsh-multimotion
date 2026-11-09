@@ -1,5 +1,8 @@
 # 动效 (Motion pack) + 视口优化 (Viewport) · `dsh-multimotion`
 
+- GitHub: <https://github.com/steavenawa/dsh-multimotion>
+- npm: <https://www.npmjs.com/package/dsh-multimotion>
+
 给 DeepSeek Harness 的 Web 界面加一层「更多动画」，并把控制权交给用户：
 三档强度预设、三组效果开关、一个「减少动态效果」总开关，设置页里带实时预览。
 
@@ -163,9 +166,11 @@
 
 ## 安装 / 卸载
 
-- 安装：Plugin Manager → 添加插件 → 选择本目录（`install_bundle` 会以 link 方式接入）。
-  本包会插入两行：`multimotion`（动效）与 `multimotion-viewport`（视口优化 subpackage）。
-- 卸载：Plugin Manager 里移除 `dsh-multimotion` 即可；localStorage 里的键可忽略。
+- 从 npm 安装：Plugin Manager → 添加插件 → 输入包名 `dsh-multimotion`
+  （插入两行：`multimotion`（动效）与 `multimotion-viewport`（视口优化 subpackage））。
+- 从源码安装：Plugin Manager → 添加插件 → 选择本目录（`install_bundle` 会以 link 方式接入）。
+- 卸载：Plugin Manager 里移除 `dsh-multimotion` 即可；localStorage 里的键可忽略（旧版
+  `dsh.motion.settings.v1` 的设置在升级时自动迁移）。
 
 ## 已知边界
 
