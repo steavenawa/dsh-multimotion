@@ -68,6 +68,7 @@ window.__ModuleLoader__.load({
       viewport: true,
       lazyRows: true,
       scrollChain: true,
+      smartEarlier: true,
       margin: 'normal',
     };
 
@@ -165,6 +166,8 @@ window.__ModuleLoader__.load({
       'viewport.margin.far': 'Far 2600px',
       'viewport.scrollChain': 'Contain scroll chaining',
       'viewport.scrollChain.desc': 'Scrolling the conversation no longer chains to the page behind it.',
+      'viewport.smartEarlier': 'Smart load earlier',
+      'viewport.smartEarlier.desc': 'Near the top of the conversation, earlier history loads by itself — one page at a time, using the preload distance above, never double-clicking.',
       'viewport.note': 'Independent of the motion pack: it keeps working with motion off. Saved in this window and applied live.',
     };
 
@@ -208,6 +211,8 @@ window.__ModuleLoader__.load({
       'viewport.margin.far': '远 2600px',
       'viewport.scrollChain': '阻止滚动链',
       'viewport.scrollChain.desc': '滚动会话时不再把滚动传递给背后的页面。',
+      'viewport.smartEarlier': '智能加载更早',
+      'viewport.smartEarlier.desc': '长对话滚到接近顶部时自动加载更早的历史：距离用上面的「离屏预加载距离」，一次一页，不会重复点击。',
       'viewport.note': '独立于动效包：关闭全部动效后依然生效。设置保存在本窗口并立即生效。',
     };
 
@@ -230,7 +235,7 @@ window.__ModuleLoader__.load({
         if (parsed.margin === 'near' || parsed.margin === 'normal' || parsed.margin === 'far') {
           next.margin = parsed.margin;
         }
-        for (const key of ['chat', 'ui', 'ambient', 'reduceMotion', 'blurScroll', 'blurDirection', 'viewport', 'lazyRows', 'scrollChain']) {
+        for (const key of ['chat', 'ui', 'ambient', 'reduceMotion', 'blurScroll', 'blurDirection', 'viewport', 'lazyRows', 'scrollChain', 'smartEarlier']) {
           if (typeof parsed[key] === 'boolean') next[key] = parsed[key];
         }
       } catch (error) {
@@ -461,6 +466,9 @@ window.__ModuleLoader__.load({
       }
       if (settings.scrollChain) {
         parts.push(`${P}[data-conversation-scroll]{overscroll-behavior:contain}`);
+      }
+      if (settings.smartEarlier) {
+        parts.push(`@media (prefers-reduced-motion: no-preference){${P}[data-dshm-autoloading] button{animation:dshm-autoload-pulse 1.1s ease-in-out infinite}@keyframes dshm-autoload-pulse{0%,100%{opacity:1}50%{opacity:.55}}}`);
       }
       return parts.join('');
     }
@@ -727,6 +735,183 @@ window.__ModuleLoader__.load({
           row.removeAttribute('data-dshm-lazy');
         }
         observed.clear();
+        scroller = null;
+      };
+    }
+
+
+    /**
+     * Smart "load earlier": when the reader scrolls up near the top of a long
+     * conversation, click the shipped load-earlier button before they reach it.
+     * The button is found structurally (`div[class*="_older"] > button`) so it
+     * survives localization; known labels are only a fallback. One page at a
+     * time: the runtime waits until the host re-enables the button, then adds a
+     * short cooldown so a single scroll gesture cannot chain several pages.
+     * @param marginKey - prefetch distance preset (reuses the viewport margins).
+     * @returns cleanup that removes listeners, timers and the pulse marker.
+     */
+    function installSmartEarlier(marginKey) {
+      const margin = VIEWPORT_MARGINS[marginKey] ?? VIEWPORT_MARGINS.normal;
+      const LABELS = ['加载更早', '载入更早', '加载更多', 'Load earlier', 'Load older', 'Load more'];
+      let scroller = null;
+      let retry = 0;
+      let frame = 0;
+      let watchTimer = 0;
+      let watchTimeout = 0;
+      let releaseTimer = 0;
+      let loading = false;
+      let cooldownUntil = 0;
+      let lastTop = null;
+      let activeWrapper = null;
+
+      /** @returns the shipped load-earlier button, if the conversation has more. */
+      function findButton() {
+        if (scroller === null) return null;
+        const direct = scroller.querySelector('div[class*="_older"] > button');
+        if (direct instanceof HTMLButtonElement) return direct;
+        for (const button of scroller.querySelectorAll('button')) {
+          if (!(button instanceof HTMLButtonElement)) continue;
+          const label = (button.textContent ?? '').trim();
+          if (LABELS.includes(label)) return button;
+        }
+        return null;
+      }
+
+      /** @param button - the button whose wrapper should pulse while loading. */
+      function markLoading(button) {
+        const holder = button.parentElement;
+        if (holder === null) return;
+        holder.setAttribute('data-dshm-autoloading', '');
+        activeWrapper = holder;
+      }
+
+      /** Remove the pulse marker from whichever wrapper carried it. */
+      function clearMark() {
+        if (activeWrapper !== null) activeWrapper.removeAttribute('data-dshm-autoloading');
+        activeWrapper = null;
+      }
+
+      /** Stop polling the host button state. */
+      function clearWatch() {
+        if (watchTimer !== 0) {
+          window.clearInterval(watchTimer);
+          watchTimer = 0;
+        }
+        if (watchTimeout !== 0) {
+          window.clearTimeout(watchTimeout);
+          watchTimeout = 0;
+        }
+      }
+
+      /** Release the guard after a host page finished (or a timeout). */
+      function finish(delay) {
+        clearWatch();
+        if (releaseTimer !== 0) window.clearTimeout(releaseTimer);
+        releaseTimer = window.setTimeout(() => {
+          releaseTimer = 0;
+          loading = false;
+          cooldownUntil = performance.now() + 650;
+          clearMark();
+        }, delay);
+      }
+
+      /** Wait until the host re-enables the button, then release the guard. */
+      function watch(button) {
+        clearWatch();
+        loading = true;
+        markLoading(button);
+        watchTimer = window.setInterval(() => {
+          if (scroller === null) {
+            clearWatch();
+            return;
+          }
+          const next = findButton();
+          if (next === null) {
+            // No more history: release and stop trying until it appears again.
+            finish(150);
+            return;
+          }
+          if (!next.disabled) finish(120);
+        }, 140);
+        watchTimeout = window.setTimeout(() => finish(0), 8000);
+      }
+
+      /** Try one automatic page load if the reader is near the top. */
+      function attempt() {
+        if (scroller === null || loading) return;
+        if (performance.now() < cooldownUntil) return;
+        if (scroller.scrollTop > margin) return;
+        const button = findButton();
+        if (button === null) return;
+        if (button.disabled) {
+          // The host is already loading a page (e.g. the user clicked it).
+          loading = true;
+          markLoading(button);
+          finish(700);
+          return;
+        }
+        try {
+          button.click();
+        } catch (error) {
+          loading = false;
+          clearMark();
+          return;
+        }
+        watch(button);
+      }
+
+      /** @param event - a wheel inside the conversation scroller: upward is negative. */
+      function onWheel(event) {
+        if (scroller === null || event.deltaY >= 0) return;
+        if (scroller.scrollTop > margin) return;
+        if (frame !== 0) return;
+        frame = requestAnimationFrame(() => {
+          frame = 0;
+          if (scroller === null || scroller.scrollTop > margin) return;
+          attempt();
+        });
+      }
+
+      /** @param event - a scroll inside the conversation scroller. */
+      function onScroll() {
+        if (scroller === null) return;
+        const top = scroller.scrollTop;
+        const delta = lastTop === null ? 0 : top - lastTop;
+        lastTop = top;
+        if (top > margin) return;
+        // Only a genuine upward gesture may prefetch: programmatic re-anchoring
+        // after a page load moves the content the other way.
+        if (delta > -1) return;
+        if (frame !== 0) return;
+        frame = requestAnimationFrame(() => {
+          frame = 0;
+          if (scroller === null || scroller.scrollTop > margin) return;
+          attempt();
+        });
+      }
+
+      /** Find the conversation scroller once it mounts. */
+      function setup() {
+        scroller = document.querySelector('[data-conversation-scroll]');
+        if (scroller === null) {
+          retry = window.setTimeout(setup, 400);
+          return;
+        }
+        scroller.addEventListener('scroll', onScroll, { passive: true });
+        scroller.addEventListener('wheel', onWheel, { passive: true });
+      }
+
+      setup();
+      return () => {
+        if (retry !== 0) window.clearTimeout(retry);
+        if (frame !== 0) cancelAnimationFrame(frame);
+        if (releaseTimer !== 0) window.clearTimeout(releaseTimer);
+        clearWatch();
+        clearMark();
+        if (scroller !== null) {
+          scroller.removeEventListener('scroll', onScroll);
+          scroller.removeEventListener('wheel', onWheel);
+        }
         scroller = null;
       };
     }
@@ -1244,6 +1429,14 @@ window.__ModuleLoader__.load({
             description: t('viewport.scrollChain.desc'),
             disabled: !settings.viewport,
           }),
+          h(SwitchRow, {
+            key: 'earlier',
+            checked: settings.smartEarlier,
+            onChange: (value) => update({ smartEarlier: value }),
+            label: t('viewport.smartEarlier'),
+            description: t('viewport.smartEarlier.desc'),
+            disabled: !settings.viewport,
+          }),
         ]),
         h('p', { key: 'note', className: 'dshm-note' }, t('viewport.note')),
       ]);
@@ -1284,6 +1477,11 @@ window.__ModuleLoader__.load({
         if (!settings.viewport || !settings.lazyRows) return undefined;
         return installViewportLazy(settings.margin);
       }, [settings.viewport, settings.lazyRows, settings.margin]);
+      // Smart "load earlier": prefetch older history before the reader hits top.
+      React.useEffect(() => {
+        if (!settings.viewport || !settings.smartEarlier) return undefined;
+        return installSmartEarlier(settings.margin);
+      }, [settings.viewport, settings.smartEarlier, settings.margin]);
       // Directional motion blur on the conversation scroller (optional trail).
       React.useEffect(() => {
         if (!settings.enabled || settings.reduceMotion || !settings.blurScroll) return undefined;
@@ -1351,7 +1549,7 @@ window.__ModuleLoader__.load({
       ctx.slots.inject(OVERLAY_SLOT, () => ctx.slots.register({
         name: OVERLAY_SLOT,
         id: 'multimotion-styles',
-        order: 919,
+        order: 920,
       }, MotionStyles));
 
       // Settings navigation: one page plus its icon.
@@ -1387,6 +1585,7 @@ window.__ModuleLoader__.load({
     return { inject, apply };
   },
 });
+
 
 
 
