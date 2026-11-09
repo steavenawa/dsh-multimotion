@@ -1,0 +1,18 @@
+# 动效 (Multimotion) bundle patch: animation + main-viewport performance.
+#
+# Two plugins share one Host package and one browser module:
+#
+# - `multimotion` mounts the package root: animation settings page, the global
+#   motion stylesheet, deferred-collapse runtime and directional motion blur.
+# - `multimotion-viewport` mounts the `./viewport` subpath plugin: the
+#   subpackage carrying main-viewport performance (measured offscreen
+#   weak-loading with incremental resize re-measure) and its own Settings page.
+#
+# One package = one browser module (`client.js`), so both rows are served by
+# the same client code and no second copy loads.
+- insert:
+    - id: multimotion
+      name: 'dsh-multimotion'
+
+    - id: multimotion-viewport
+      name: 'dsh-multimotion/viewport'

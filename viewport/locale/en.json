@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Viewport",
+    "description": "Main-viewport performance: offscreen conversation rows skip layout and paint (content-visibility), long sessions scroll and switch faster. Rows render with a remembered height estimate, so very fast scrolling back through old history can show a brief reflow. Tune it in Settings → Viewport."
+  }
+}
