@@ -1,6 +1,6 @@
 {
   "name": "dsh-multimotion",
-  "version": "0.2.0",
+  "version": "0.1.2",
   "description": "动效与主视口性能增强 (Multimotion) for DeepSeek Harness: message entrances, streaming shimmer, expand/collapse, directional motion blur, offscreen weak-loading with incremental resize reflow — plus a viewport subpackage.",
   "type": "module",
   "license": "MIT",
@@ -63,5 +63,6 @@
     "access": "public"
   }
 }
+
 
 
