@@ -304,6 +304,13 @@ window.__ModuleLoader__.load({
       '@keyframes dshm-glow-pulse{0%,100%{box-shadow:0 0 0 0 transparent}50%{box-shadow:0 0 0 4px var(--dshm-glow)}}',
       '@keyframes dshm-chevron-pop{from{scale:.55;opacity:.25}to{scale:1;opacity:1}}',
       '@keyframes dshm-unfold{from{opacity:0;translate:0 -4px}to{opacity:1;translate:0 0}}',
+      '@keyframes dshm-menu-unfold{0%{clip-path:inset(100% 0 0 0)}100%{clip-path:inset(0)}}',
+      '@keyframes dshm-menu-content-in{0%{opacity:0;translate:0 8px}100%{opacity:1;translate:none}}',
+      '@keyframes dshm-glass-in{0%{backdrop-filter:blur(0px) saturate(100%)}100%{backdrop-filter:blur(20px) saturate(150%)}}',
+      '@keyframes dshm-glass-out{0%{opacity:1}100%{opacity:0}}',
+      '@keyframes dshm-menu-row-in{0%{opacity:0;translate:0 5px}100%{opacity:1;translate:none}}',
+      '@keyframes dshm-menu-out{0%{opacity:1;scale:1;translate:0 0}100%{opacity:.45;scale:.97;translate:0 8px}}',
+
     ].join('');
 
     /** Conversation effects: chat rows, streaming text, tool cards, bubbles. */
@@ -398,6 +405,45 @@ window.__ModuleLoader__.load({
       `${P}[data-shortcut-modal="settings"] nav{overflow-x:clip}`,
       `${P}[data-shortcut-modal="settings"] nav > button{transition:translate 140ms cubic-bezier(.2,.8,.2,1),background-color 140ms ease,color 140ms ease}`,
       `${P}[data-shortcut-modal="settings"] nav > button:hover{translate:var(--dshm-nudge) 0}`,
+      // Composer command palette / slash suggestions: the host only fades the
+      // surface's children, so the popup card itself gets a short lift+scale.
+      // `:has([role="listbox"])` scopes this to composer popovers (the command
+      // palette card and the slash suggestion menu), leaving plain menus alone.
+      `${P}[data-menu-material]{transform-origin:50% 100%}`,
+      // Composer popover glass: the host paints the panel from these two
+      // variables on the surface; override them so the panel is darker and
+      // frosts the chat behind it. Theme-aware base mixed with black, then
+      // made translucent (a fixed rgba would fight the light theme).
+      `${P}[data-menu-material]:has([role="listbox"]),${P}[data-menu-material]:has(input){--dsw-menu-surface-fill:color-mix(in srgb,color-mix(in srgb,var(--dsw-alias-bg-base,#26282b) 72%,#000) 44%,transparent);--dsw-menu-backdrop-filter:blur(20px) saturate(150%)}`,
+
+      // The panel grows upward from its bottom edge (it is anchored above the
+      // composer): a clip reveal keeps the host's geometry untouched and stays
+      // transform-free, so the material can still sample the page behind it.
+      `${P}[data-menu-material]:has([role="listbox"]),${P}[data-menu-material]:has(input){animation:dshm-menu-unfold 260ms cubic-bezier(.2,.85,.25,1)}`,
+      // Content rises while the panel fades; the material (aria-hidden) keeps
+      // its transform-free surface so the glass can be sampled the whole time.
+      `${P}[data-menu-material]:has([role="listbox"]) > *:not([aria-hidden="true"]),${P}[data-menu-material]:has(input) > *:not([aria-hidden="true"]){animation:dshm-menu-content-in 220ms cubic-bezier(.2,.85,.25,1)}`,
+      `${P}[data-menu-material]:has([role="listbox"]) > [aria-hidden="true"],${P}[data-menu-material]:has(input) > [aria-hidden="true"]{animation:dshm-glass-in 240ms cubic-bezier(.2,.8,.2,1) 280ms backwards}`,
+      // Out-of-tree glass: a body-level fixed rect glued to the popup. The
+      // host tree has a will-change:transform ancestor, so blurring inside it
+      // is unreliable; this element's backdrop is the whole page instead.
+      `${P}[data-dshm-glass]{position:fixed;pointer-events:none;z-index:8;border-radius:var(--dsw-radius-lg);background:rgba(6,8,12,.34);-webkit-backdrop-filter:blur(20px) saturate(150%);backdrop-filter:blur(20px) saturate(150%);animation:dshm-glass-in 240ms cubic-bezier(.2,.8,.2,1) 140ms backwards}`,
+      `${P}[data-dshm-glass][data-dshm-leaving]{animation:dshm-glass-out 160ms ease-in both}`,
+      `${P}[data-menu-material]:has([role="listbox"])[data-menu-phase="dismiss"],${P}[data-menu-material]:has(input)[data-menu-phase="dismiss"]{animation:dshm-menu-out 110ms cubic-bezier(.4,0,.7,1) both}`,
+      // Options fade up one after another instead of landing as one slab.
+      `${P}[data-menu-material] [role="option"],${P}[data-menu-material] [role="presentation"]{animation:dshm-menu-row-in 170ms cubic-bezier(.2,.85,.25,1) backwards}`,
+      `${P}[data-menu-material] [role="option"]:nth-child(2){animation-delay:16ms}`,
+      `${P}[data-menu-material] [role="option"]:nth-child(3){animation-delay:32ms}`,
+      `${P}[data-menu-material] [role="option"]:nth-child(4){animation-delay:48ms}`,
+      `${P}[data-menu-material] [role="option"]:nth-child(5){animation-delay:64ms}`,
+      `${P}[data-menu-material] [role="option"]:nth-child(6){animation-delay:80ms}`,
+      `${P}[data-menu-material] [role="option"]:nth-child(7){animation-delay:96ms}`,
+      `${P}[data-menu-material] [role="option"]:nth-child(8){animation-delay:112ms}`,
+      `${P}[data-menu-material] [role="option"]:nth-child(9){animation-delay:128ms}`,
+      `${P}[data-menu-material] [role="option"]:nth-child(10){animation-delay:144ms}`,
+      `${P}[data-menu-material] [role="option"]:nth-child(11){animation-delay:160ms}`,
+      `${P}[data-menu-material] [role="option"]:nth-child(12){animation-delay:176ms}`,
+      `${P}[data-menu-material] [role="option"]:nth-child(13){animation-delay:192ms}`,
     ].join('');
 
     /** Ambience effects: floating marks, content fade, sending glow. */
@@ -916,6 +962,108 @@ window.__ModuleLoader__.load({
       };
     }
 
+
+    /**
+     * Out-of-tree glass for composer popovers. The popup lives under a
+     * will-change:transform ancestor, which can break backdrop-filter; instead
+     * a body-level fixed rectangle tracks the popup's rect and blurs the page
+     * behind it (z-index below the composer stack, above the chat). It fades in
+     * and out on its own and is purely decorative (pointer-events: none).
+     * @returns cleanup that removes listeners, rAF loops and glass nodes.
+     */
+    function installPopoverGlass() {
+      const SURFACE = '[data-menu-material]:has([role="listbox"]), [data-menu-material]:has(input)';
+      /** @type {Map<HTMLElement, HTMLElement>} surface -> glass rect */
+      const glasses = new Map();
+      let refreshFrame = 0;
+      let trackFrame = 0;
+
+      /** @param surface - popup surface element. @returns a fresh glass node. */
+      function createGlass(surface) {
+        const glass = document.createElement('div');
+        glass.setAttribute('data-dshm-glass', '');
+        const radius = getComputedStyle(surface).borderRadius;
+        if (radius !== '') glass.style.borderRadius = radius;
+        document.body.appendChild(glass);
+        sync(surface, glass);
+        glasses.set(surface, glass);
+        return glass;
+      }
+
+      /** @param surface - popup surface. @param glass - its glass node. */
+      function sync(surface, glass) {
+        const rect = surface.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) {
+          glass.style.display = 'none';
+          return;
+        }
+        glass.style.display = '';
+        glass.style.left = `${Math.round(rect.left)}px`;
+        glass.style.top = `${Math.round(rect.top)}px`;
+        glass.style.width = `${Math.round(rect.width)}px`;
+        glass.style.height = `${Math.round(rect.height)}px`;
+      }
+
+      /** @param glass - glass node to fade out and drop. */
+      function leave(glass) {
+        if (!glass.isConnected || glass.hasAttribute('data-dshm-leaving')) return;
+        glass.setAttribute('data-dshm-leaving', '');
+        window.setTimeout(() => {
+          glass.remove();
+        }, 190);
+      }
+
+      /** Keep the glass glued while it moves; reap it when its surface closes. */
+      function track() {
+        trackFrame = 0;
+        for (const [surface, glass] of Array.from(glasses)) {
+          if (!surface.isConnected) {
+            glasses.delete(surface);
+            leave(glass);
+            continue;
+          }
+          sync(surface, glass);
+        }
+        if (glasses.size > 0) trackFrame = requestAnimationFrame(track);
+      }
+
+      /** Sync the set of glass nodes with the open popup surfaces. */
+      function refresh() {
+        refreshFrame = 0;
+        for (const [surface, glass] of Array.from(glasses)) {
+          if (!surface.isConnected) {
+            glasses.delete(surface);
+            leave(glass);
+          }
+        }
+        for (const surface of document.querySelectorAll(SURFACE)) {
+          if (!(surface instanceof HTMLElement) || glasses.has(surface)) continue;
+          createGlass(surface);
+        }
+        if (glasses.size > 0 && trackFrame === 0) trackFrame = requestAnimationFrame(track);
+      }
+
+      const schedule = () => {
+        if (refreshFrame !== 0) return;
+        refreshFrame = requestAnimationFrame(refresh);
+      };
+
+      for (const type of ['pointerdown', 'keydown', 'focusin', 'scroll']) {
+        document.addEventListener(type, schedule, true);
+      }
+      window.addEventListener('resize', schedule);
+      refresh();
+      return () => {
+        if (refreshFrame !== 0) cancelAnimationFrame(refreshFrame);
+        if (trackFrame !== 0) cancelAnimationFrame(trackFrame);
+        for (const type of ['pointerdown', 'keydown', 'focusin', 'scroll']) {
+          document.removeEventListener(type, schedule, true);
+        }
+        window.removeEventListener('resize', schedule);
+        for (const glass of glasses.values()) glass.remove();
+        glasses.clear();
+      };
+    }
 
     /**
      * Build the global stylesheet for one settings object.
@@ -1477,7 +1625,12 @@ window.__ModuleLoader__.load({
         if (!settings.viewport || !settings.lazyRows) return undefined;
         return installViewportLazy(settings.margin);
       }, [settings.viewport, settings.lazyRows, settings.margin]);
-      // Smart "load earlier": prefetch older history before the reader hits top.
+      // Composer popover glass, rendered out of tree so the blur always works.
+      React.useEffect(() => {
+        if (!settings.enabled || !settings.ui || settings.reduceMotion) return undefined;
+        return installPopoverGlass();
+      }, [settings.enabled, settings.ui, settings.reduceMotion]);
+      // Composer popover backdrop: dim + frost the page behind an open popup.
       React.useEffect(() => {
         if (!settings.viewport || !settings.smartEarlier) return undefined;
         return installSmartEarlier(settings.margin);
@@ -1549,7 +1702,7 @@ window.__ModuleLoader__.load({
       ctx.slots.inject(OVERLAY_SLOT, () => ctx.slots.register({
         name: OVERLAY_SLOT,
         id: 'multimotion-styles',
-        order: 920,
+        order: 937,
       }, MotionStyles));
 
       // Settings navigation: one page plus its icon.
@@ -1585,17 +1738,3 @@ window.__ModuleLoader__.load({
     return { inject, apply };
   },
 });
-
-
-
-
-
-
-
-
-
-
-
-
-
-
