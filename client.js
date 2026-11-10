@@ -167,7 +167,7 @@ window.__ModuleLoader__.load({
       'viewport.scrollChain': 'Contain scroll chaining',
       'viewport.scrollChain.desc': 'Scrolling the conversation no longer chains to the page behind it.',
       'viewport.smartEarlier': 'Smart load earlier',
-      'viewport.smartEarlier.desc': 'Near the top of the conversation, earlier history loads by itself — one page at a time, using the preload distance above, never double-clicking.',
+      'viewport.smartEarlier.desc': 'Near the top of the conversation, earlier history loads by itself — one page at a time, never double-clicking. Fast wheel scrolling predicts arrival and preloads earlier than the fixed distance.',
       'viewport.note': 'Independent of the motion pack: it keeps working with motion off. Saved in this window and applied live.',
     };
 
@@ -212,7 +212,7 @@ window.__ModuleLoader__.load({
       'viewport.scrollChain': '阻止滚动链',
       'viewport.scrollChain.desc': '滚动会话时不再把滚动传递给背后的页面。',
       'viewport.smartEarlier': '智能加载更早',
-      'viewport.smartEarlier.desc': '长对话滚到接近顶部时自动加载更早的历史：距离用上面的「离屏预加载距离」，一次一页，不会重复点击。',
+      'viewport.smartEarlier.desc': '长对话滚到接近顶部时自动加载更早的历史：距离用上面的「离屏预加载距离」，一次一页，不会重复点击。快速上滚时会按滚轮速度预测到达时间，提前预取。',
       'viewport.note': '独立于动效包：关闭全部动效后依然生效。设置保存在本窗口并立即生效。',
     };
 
@@ -429,6 +429,10 @@ window.__ModuleLoader__.load({
       // is unreliable; this element's backdrop is the whole page instead.
       `${P}[data-dshm-glass]{position:fixed;pointer-events:none;z-index:8;border-radius:var(--dsw-radius-lg);background:rgba(6,8,12,.34);-webkit-backdrop-filter:blur(20px) saturate(150%);backdrop-filter:blur(20px) saturate(150%);animation:dshm-glass-in 240ms cubic-bezier(.2,.8,.2,1) 140ms backwards}`,
       `${P}[data-dshm-glass][data-dshm-leaving]{animation:dshm-glass-out 160ms ease-in both}`,
+      // Sidebar collapse/expand (A/B): only steer the transition curve. No
+      // shaping switch and no row containment — toggling those forced an extra
+      // full re-shape at the start/end, which read as a stutter of its own.
+      'html[data-dsh-multimotion][data-dshm-sideanim] [class*="_frame"]{transition:grid-template-columns 280ms ease!important}',
       `${P}[data-menu-material]:has([role="listbox"])[data-menu-phase="dismiss"],${P}[data-menu-material]:has(input)[data-menu-phase="dismiss"]{animation:dshm-menu-out 110ms cubic-bezier(.4,0,.7,1) both}`,
       // Options fade up one after another instead of landing as one slab.
       `${P}[data-menu-material] [role="option"],${P}[data-menu-material] [role="presentation"]{animation:dshm-menu-row-in 170ms cubic-bezier(.2,.85,.25,1) backwards}`,
@@ -547,12 +551,31 @@ window.__ModuleLoader__.load({
       let pending = [];
       let pendingIndex = 0;
 
+      /**
+       * @param row - flow row.
+       * @returns true when the row belongs to the live tail (last few rows) and
+       * must stay rendered: a streaming row keeps changing height, and a stale
+       * placeholder there leaves a blank gap under the last message.
+       */
+      function isLiveTail(row) {
+        if (row.getAnimations().length > 0) return true;
+        if (row.querySelector('[data-streaming], [data-state="running"], [data-chat-motion]') !== null) return true;
+        let tail = 0;
+        let sibling = row.nextElementSibling;
+        while (sibling !== null && tail < 3) {
+          if (sibling.matches('[data-chat-flow-key]')) tail += 1;
+          sibling = sibling.nextElementSibling;
+        }
+        return tail < 3;
+      }
+
       /** @param row - a flow row to unload while keeping its measured height. */
       function hide(row) {
         if (suspended) return;
         if (row.getAttribute('data-dshm-lazy') === '') return;
         if (row.contains(document.activeElement)) return;
         if (row.hasAttribute('data-chat-motion')) return;
+        if (isLiveTail(row)) return;
         const height = row.getBoundingClientRect().height;
         if (height <= 0) return;
         row.style.containIntrinsicSize = `${intrinsicSize(row, height)}px`;
@@ -808,7 +831,37 @@ window.__ModuleLoader__.load({
       let loading = false;
       let cooldownUntil = 0;
       let lastTop = null;
+      /** Recent scroll samples for wheel-speed prediction: { t, top }. */
+      const samples = [];
+      let recentVelocity = 0;
       let activeWrapper = null;
+
+      /**
+       * @param top - current scrollTop.
+       * @returns smoothed upward velocity in px/s (0 when not moving up).
+       */
+      function sampleVelocity(top) {
+        const now = performance.now();
+        samples.push({ t: now, top });
+        while (samples.length > 8) samples.shift();
+        while (samples.length > 2 && now - samples[0].t > 140) samples.shift();
+        if (samples.length < 2) return 0;
+        const first = samples[0];
+        const last = samples[samples.length - 1];
+        const elapsed = last.t - first.t;
+        if (elapsed <= 0) return 0;
+        recentVelocity = Math.max(0, ((first.top - last.top) / elapsed) * 1000);
+        return recentVelocity;
+      }
+
+      /**
+       * @param top - current scrollTop.
+       * @returns predicted milliseconds until the reader reaches the top/edge.
+       */
+      function predictArrival(top) {
+        if (recentVelocity <= 60) return Number.POSITIVE_INFINITY;
+        return (top / recentVelocity) * 1000;
+      }
 
       /** @returns the shipped load-earlier button, if the conversation has more. */
       function findButton() {
@@ -856,7 +909,7 @@ window.__ModuleLoader__.load({
         releaseTimer = window.setTimeout(() => {
           releaseTimer = 0;
           loading = false;
-          cooldownUntil = performance.now() + 650;
+          cooldownUntil = performance.now() + (recentVelocity > 1800 ? 260 : 650);
           clearMark();
         }, delay);
       }
@@ -882,11 +935,16 @@ window.__ModuleLoader__.load({
         watchTimeout = window.setTimeout(() => finish(0), 8000);
       }
 
-      /** Try one automatic page load if the reader is near the top. */
-      function attempt() {
+      /**
+       * Try one automatic page load.
+       * @param urgent - true when the speed prediction says the reader arrives
+       * within the look-ahead window; the fixed margin may still be far.
+       */
+      function attempt(urgent) {
         if (scroller === null || loading) return;
         if (performance.now() < cooldownUntil) return;
-        if (scroller.scrollTop > margin) return;
+        const deadline = urgent === true ? 6000 : margin;
+        if (scroller.scrollTop > deadline) return;
         const button = findButton();
         if (button === null) return;
         if (button.disabled) {
@@ -909,12 +967,15 @@ window.__ModuleLoader__.load({
       /** @param event - a wheel inside the conversation scroller: upward is negative. */
       function onWheel(event) {
         if (scroller === null || event.deltaY >= 0) return;
-        if (scroller.scrollTop > margin) return;
         if (frame !== 0) return;
         frame = requestAnimationFrame(() => {
           frame = 0;
-          if (scroller === null || scroller.scrollTop > margin) return;
-          attempt();
+          if (scroller === null) return;
+          const current = scroller.scrollTop;
+          const predicted = predictArrival(current);
+          const urgent = predicted <= 420 && current <= 6000;
+          if (current > margin && !urgent) return;
+          attempt(urgent);
         });
       }
 
@@ -924,15 +985,21 @@ window.__ModuleLoader__.load({
         const top = scroller.scrollTop;
         const delta = lastTop === null ? 0 : top - lastTop;
         lastTop = top;
-        if (top > margin) return;
+        const velocity = sampleVelocity(top);
         // Only a genuine upward gesture may prefetch: programmatic re-anchoring
         // after a page load moves the content the other way.
         if (delta > -1) return;
         if (frame !== 0) return;
         frame = requestAnimationFrame(() => {
           frame = 0;
-          if (scroller === null || scroller.scrollTop > margin) return;
-          attempt();
+          if (scroller === null) return;
+          const current = scroller.scrollTop;
+          // Wheel-speed prediction: a fast upward gesture prefetches before the
+          // fixed margin, so the page is ready when the reader reaches the edge.
+          const predicted = velocity > 60 ? (current / velocity) * 1000 : Number.POSITIVE_INFINITY;
+          const urgent = predicted <= 420 && current <= 6000;
+          if (current > margin && !urgent) return;
+          attempt(urgent);
         });
       }
 
@@ -1062,6 +1129,132 @@ window.__ModuleLoader__.load({
         window.removeEventListener('resize', schedule);
         for (const glass of glasses.values()) glass.remove();
         glasses.clear();
+      };
+    }
+
+    /**
+     * Horizontal slide for role=tabpanel mounts (plugin manager 已安装 / 发现,
+     * and other tabbed pages). The host unmounts the old panel and mounts a
+     * fresh one per tab, so the new panel slides in from the side: a later tab
+     * enters from the right, an earlier tab from the left. Direction is inferred
+     * from the tablist order and remembered per tablist.
+     * @returns cleanup that disconnects the observer.
+     */
+    function installTabPanelSlide() {
+      const PANEL = '[role="tabpanel"]';
+      const DURATION = 240;
+      const DISTANCE = 26;
+      const lastIndex = new WeakMap();
+
+      /** @param panel - tabpanel element. @returns list/index info or null. */
+      function tabInfo(panel) {
+        const labelId = panel.getAttribute('aria-labelledby');
+        if (labelId === null) return null;
+        const tab = document.getElementById(labelId);
+        if (!(tab instanceof HTMLElement)) return null;
+        const list = tab.parentElement;
+        if (list === null) return null;
+        const tabs = Array.from(list.children).filter((child) => child.getAttribute('role') === 'tab');
+        const index = tabs.indexOf(tab);
+        if (index < 0) return null;
+        return { list, index };
+      }
+
+      /** @param panel - freshly mounted tabpanel to slide in. */
+      function slide(panel) {
+        if (!(panel instanceof HTMLElement) || panel.getAnimations().length > 0) return;
+        const info = tabInfo(panel);
+        if (info === null) return;
+        const previous = lastIndex.get(info.list);
+        lastIndex.set(info.list, info.index);
+        if (previous === undefined || previous === info.index) return;
+        const direction = info.index > previous ? 1 : -1;
+        panel.animate([
+          { opacity: 0.001, transform: `translateX(${direction * DISTANCE}px)` },
+          { opacity: 1, transform: 'translateX(0)' },
+        ], { duration: DURATION, easing: 'cubic-bezier(.2,.8,.2,1)' });
+      }
+
+      const observer = new MutationObserver((records) => {
+        for (const record of records) {
+          for (const node of record.addedNodes) {
+            if (!(node instanceof Element)) continue;
+            if (node.matches(PANEL)) slide(node);
+            for (const panel of node.querySelectorAll(PANEL)) slide(panel);
+          }
+        }
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+      // Seed existing panels so opening the page itself does not animate.
+      for (const panel of document.querySelectorAll(PANEL)) {
+        const info = tabInfo(panel);
+        if (info !== null && !lastIndex.has(info.list)) lastIndex.set(info.list, info.index);
+      }
+      return () => observer.disconnect();
+    }
+
+    /**
+     * External hook for the left/right sidebar collapse buttons. The host
+     * animates grid-template-columns, which reflows the chat every frame. This
+     * sets a short-lived root attribute around the toggle click so the
+     * stylesheet can steer that transition (280ms curve) instead of letting it
+     * snap — the real reflow is kept, only its timing is overridden.
+     * @returns cleanup that removes the capture listener.
+     */
+    function installSidebarReflowAnimation() {
+      const TOGGLE = '[data-sidebar-toggle], [data-sidebar-opener], [data-sidebar-mask], [data-sidebar-right-expand], [data-sidebar-right-toggle]';
+      const ROOT_ATTR = 'data-dshm-sideanim';
+      const DURATION = 280;
+      let bypass = false;
+      let cleanupTimer = 0;
+
+      /** @param target - click target. @returns true for a host toggle. */
+      function isToggle(target) {
+        if (!(target instanceof Element)) return false;
+        return target.closest(TOGGLE) !== null;
+      }
+
+      /** Replay the toggle's click; .click() would be suppressed re-entrantly. */
+      function press(toggle) {
+        toggle.dispatchEvent(new MouseEvent('click', {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          detail: 1,
+        }));
+      }
+
+      /** Drop the fast-path attribute once the animation is over. */
+      function finish() {
+        if (cleanupTimer !== 0) {
+          window.clearTimeout(cleanupTimer);
+          cleanupTimer = 0;
+        }
+        document.documentElement.removeAttribute(ROOT_ATTR);
+      }
+
+      /** @param event - capture-phase click. */
+      function onClick(event) {
+        if (bypass) return;
+        if (!(event.target instanceof Element) || !isToggle(event.target)) return;
+        const toggle = event.target.closest(TOGGLE);
+        if (!(toggle instanceof HTMLElement)) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        document.documentElement.setAttribute(ROOT_ATTR, '');
+        bypass = true;
+        try {
+          press(toggle);
+        } finally {
+          bypass = false;
+        }
+        cleanupTimer = window.setTimeout(finish, DURATION + 120);
+      }
+
+      document.addEventListener('click', onClick, true);
+      return () => {
+        document.removeEventListener('click', onClick, true);
+        finish();
       };
     }
 
@@ -1408,7 +1601,6 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'dshm-preview', 'data-off': enabled ? undefined : '' }, [
         h('div', { key: 'head', className: 'dshm-preview-head' }, [
           h('span', { key: 'label' }, t('preview')),
-          h('span', { key: 'hint' }, enabled ? t('preview.on') : t('preview.off')),
         ]),
         h('div', { key: 'stage', className: 'dshm-preview-stage' }, [
           h('span', { key: 'msg', className: 'dshm-demo-msg', style: { animationDuration: duration(3.4) } }, t('preview.msg')),
@@ -1431,7 +1623,6 @@ window.__ModuleLoader__.load({
         h('div', { key: 'head', className: 'dshm-head' }, [
           h('div', { key: 'text', className: 'dshm-head-text' }, [
             h('span', { key: 'title', className: 'dshm-title' }, t('title')),
-            h('span', { key: 'subtitle', className: 'dshm-subtitle' }, t('subtitle')),
           ]),
           h('button', {
             key: 'master',
@@ -1462,7 +1653,6 @@ window.__ModuleLoader__.load({
             checked: settings.chat,
             onChange: (value) => update({ chat: value }),
             label: t('group.chat'),
-            description: t('group.chat.desc'),
             disabled: !settings.enabled,
           }),
           h(SwitchRow, {
@@ -1470,7 +1660,6 @@ window.__ModuleLoader__.load({
             checked: settings.ui,
             onChange: (value) => update({ ui: value }),
             label: t('group.ui'),
-            description: t('group.ui.desc'),
             disabled: !settings.enabled,
           }),
           h(SwitchRow, {
@@ -1478,7 +1667,6 @@ window.__ModuleLoader__.load({
             checked: settings.ambient,
             onChange: (value) => update({ ambient: value }),
             label: t('group.ambient'),
-            description: t('group.ambient.desc'),
             disabled: !settings.enabled,
           }),
           h(SwitchRow, {
@@ -1486,7 +1674,6 @@ window.__ModuleLoader__.load({
             checked: settings.reduceMotion,
             onChange: (value) => update({ reduceMotion: value }),
             label: t('reduce'),
-            description: t('reduce.desc'),
           }),
         ]),
           h('div', { key: 'blur', className: 'dshm-panel' }, [
@@ -1497,21 +1684,18 @@ window.__ModuleLoader__.load({
               checked: settings.blurScroll,
               onChange: (value) => update({ blurScroll: value }),
               label: t('blur.scroll'),
-              description: t('blur.scroll.desc'),
-              disabled: !settings.enabled || settings.reduceMotion,
+                disabled: !settings.enabled || settings.reduceMotion,
             }),
             h(SwitchRow, {
               key: 'direction',
               checked: settings.blurDirection,
               onChange: (value) => update({ blurDirection: value }),
               label: t('blur.direction'),
-              description: t('blur.direction.desc'),
-              disabled: !settings.enabled || settings.reduceMotion || !settings.blurScroll,
+                disabled: !settings.enabled || settings.reduceMotion || !settings.blurScroll,
             }),
           ]),
         ]),
         h(Preview, { key: 'preview', t, intensity: settings.intensity, enabled: settings.enabled && !settings.reduceMotion }),
-        h('p', { key: 'note', className: 'dshm-note' }, t('note')),
       ]);
     }
 
@@ -1535,7 +1719,6 @@ window.__ModuleLoader__.load({
         h('div', { key: 'head', className: 'dshm-head' }, [
           h('div', { key: 'text', className: 'dshm-head-text' }, [
             h('span', { key: 'title', className: 'dshm-title' }, t('viewport.title')),
-            h('span', { key: 'subtitle', className: 'dshm-subtitle' }, t('viewport.subtitle')),
           ]),
           h('button', {
             key: 'master',
@@ -1566,7 +1749,6 @@ window.__ModuleLoader__.load({
             checked: settings.lazyRows,
             onChange: (value) => update({ lazyRows: value }),
             label: t('viewport.lazy'),
-            description: t('viewport.lazy.desc'),
             disabled: !settings.viewport,
           }),
           h(SwitchRow, {
@@ -1574,7 +1756,6 @@ window.__ModuleLoader__.load({
             checked: settings.scrollChain,
             onChange: (value) => update({ scrollChain: value }),
             label: t('viewport.scrollChain'),
-            description: t('viewport.scrollChain.desc'),
             disabled: !settings.viewport,
           }),
           h(SwitchRow, {
@@ -1582,11 +1763,9 @@ window.__ModuleLoader__.load({
             checked: settings.smartEarlier,
             onChange: (value) => update({ smartEarlier: value }),
             label: t('viewport.smartEarlier'),
-            description: t('viewport.smartEarlier.desc'),
             disabled: !settings.viewport,
           }),
         ]),
-        h('p', { key: 'note', className: 'dshm-note' }, t('viewport.note')),
       ]);
     }
 
@@ -1625,6 +1804,16 @@ window.__ModuleLoader__.load({
         if (!settings.viewport || !settings.lazyRows) return undefined;
         return installViewportLazy(settings.margin);
       }, [settings.viewport, settings.lazyRows, settings.margin]);
+      // Sidebar collapse/expand: wrap the host reflow in a view transition.
+      React.useEffect(() => {
+        if (!settings.enabled || !settings.ui || settings.reduceMotion) return undefined;
+        return installSidebarReflowAnimation();
+      }, [settings.enabled, settings.ui, settings.reduceMotion]);
+      // Tab switch slide: role=tabpanel mounts come in from the side.
+      React.useEffect(() => {
+        if (!settings.enabled || !settings.ui || settings.reduceMotion) return undefined;
+        return installTabPanelSlide();
+      }, [settings.enabled, settings.ui, settings.reduceMotion]);
       // Composer popover glass, rendered out of tree so the blur always works.
       React.useEffect(() => {
         if (!settings.enabled || !settings.ui || settings.reduceMotion) return undefined;
@@ -1702,7 +1891,7 @@ window.__ModuleLoader__.load({
       ctx.slots.inject(OVERLAY_SLOT, () => ctx.slots.register({
         name: OVERLAY_SLOT,
         id: 'multimotion-styles',
-        order: 937,
+        order: 952,
       }, MotionStyles));
 
       // Settings navigation: one page plus its icon.
